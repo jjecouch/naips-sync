@@ -40,11 +40,24 @@ export default async (req) => {
   const k = url.searchParams.get("k") || "";
   if (k && !/^\d{13}-[a-z0-9]{6}$/.test(k)) return json({ error: "bad item" }, 400);
 
-  const store = getStore("naips-inbox");
+  // STRONG consistency (16 Nov 26). By default Netlify Blobs reads through an edge cache that can lag a write by up
+  // to 60 s: the tool, opened by the Shortcut straight after its upload, listed the inbox, found it empty, and only
+  // found the PDF on a later check. Strong reads go to the origin: slower, but a PDF is there the moment it's sent,
+  // and a deleted one is gone for the other iPad too. If the runtime ever lacks the uncached address strong reads
+  // need, the library throws; then this falls back to the default once rather than fail outright.
+  let store = getStore({ name: "naips-inbox", consistency: "strong" });
+  const listAll = async () => {
+    try { return await store.list({ prefix: id + "/" }); }
+    catch (e) {
+      // Any other failure fails this second try the same way, so there is nothing to tell apart.
+      store = getStore("naips-inbox");
+      return store.list({ prefix: id + "/" });
+    }
+  };
 
   // Housekeeping on every call: what is older than a day goes.
   const now = Date.now();
-  const { blobs } = await store.list({ prefix: id + "/" });
+  const { blobs } = await listAll();
   const live = [];
   for (const b of blobs) {
     const key = b.key.slice(id.length + 1);
